@@ -4,11 +4,40 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
+	"strings"
 
-	"github.com/bibib/okx-tui/core"
-	"github.com/bibib/okx-tui/ui"
+	"github.com/gandol/okx-tui-monitor/core"
+	"github.com/gandol/okx-tui-monitor/ui"
 	"github.com/joho/godotenv"
 )
+
+func validateAPICredentials(apiKey, secretKey, passphrase string) bool {
+	// Check for placeholder values
+	if strings.Contains(apiKey, "your-actual-api-key") ||
+		strings.Contains(secretKey, "your-actual-api-secret") ||
+		strings.Contains(passphrase, "your-actual-passphrase") {
+		return false
+	}
+
+	// Basic format validation
+	// API Key should be a UUID-like format (32 chars hex)
+	if matched, _ := regexp.MatchString(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`, apiKey); !matched {
+		return false
+	}
+
+	// Secret should be base64-like (at least 32 chars)
+	if len(secretKey) < 32 {
+		return false
+	}
+
+	// Passphrase should not be empty
+	if len(passphrase) == 0 {
+		return false
+	}
+
+	return true
+}
 
 func main() {
 	// Load environment variables from .env file
@@ -21,8 +50,16 @@ func main() {
 	secretKey := os.Getenv("OKX_API_SECRET")
 	passphrase := os.Getenv("OKX_API_PASSPHRASE")
 
-	if apiKey == "" || secretKey == "" || passphrase == "" {
-		log.Printf("Warning: OKX API credentials not found. Using demo mode.")
+	// Validate credentials
+	validCredentials := validateAPICredentials(apiKey, secretKey, passphrase)
+	
+	if !validCredentials {
+		log.Printf("Running in demo mode - Invalid or missing API credentials")
+		log.Printf("To use live data, please set valid OKX API credentials in .env file")
+		// Clear invalid credentials to ensure demo mode
+		apiKey, secretKey, passphrase = "", "", ""
+	} else {
+		log.Printf("Running in authenticated mode with valid API credentials")
 	}
 
 	// Create channels for communication
@@ -38,8 +75,8 @@ func main() {
 		// Create OKX client with channels
 		client := core.NewOKXClient(positionCh, balanceCh, errorCh)
 
-		// Set API credentials if available
-		if apiKey != "" && secretKey != "" && passphrase != "" {
+		// Set API credentials if available and valid
+		if validCredentials {
 			client.SetCredentials(apiKey, secretKey, passphrase)
 		}
 

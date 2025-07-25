@@ -1,4 +1,4 @@
-module github.com/bibib/okx-tui
+module github.com/gandol/okx-tui-monitor
 
 go 1.19
 

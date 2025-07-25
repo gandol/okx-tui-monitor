@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bibib/okx-tui/core"
+	"github.com/gandol/okx-tui-monitor/core"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
