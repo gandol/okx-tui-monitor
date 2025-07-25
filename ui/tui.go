@@ -391,14 +391,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case positionUpdateMsg:
-		// Update position data
-		key := fmt.Sprintf("%s-%s", msg.InstrumentID, msg.PositionSide)
-		m.positions[key] = core.PositionData(msg)
-		m.lastUpdate = time.Now()
+		// Handle position updates - could be full position data or just ticker updates
+		if msg.PositionSide != "" {
+			// Full position data with position side
+			key := fmt.Sprintf("%s-%s", msg.InstrumentID, msg.PositionSide)
+			m.positions[key] = core.PositionData(msg)
+			m.lastUpdate = time.Now()
 
-		// Add debug message for position update
-		m.AddDebugMessage(fmt.Sprintf("Position updated: %s %s %.4f @ %.2f", 
-			msg.InstrumentID, msg.PositionSide, msg.Size, msg.CurrentPrice))
+			// Add debug message for position update
+			m.AddDebugMessage(fmt.Sprintf("Position updated: %s %s %.4f @ %.2f", 
+				msg.InstrumentID, msg.PositionSide, msg.Size, msg.CurrentPrice))
+		} else {
+			// Ticker update - find existing positions for this instrument and update price
+			updated := false
+			for key, position := range m.positions {
+				if position.InstrumentID == msg.InstrumentID {
+					// Update current price and recalculate PnL
+					position.CurrentPrice = msg.CurrentPrice
+					position.Timestamp = msg.Timestamp
+					
+					// Recalculate PnL if we have position data
+					if position.Size > 0 && position.AvgPrice > 0 {
+						if position.PositionSide == "short" {
+							// For short positions, profit when price goes down
+							position.PnL = (position.AvgPrice - position.CurrentPrice) * position.Size
+						} else {
+							// For long positions, profit when price goes up
+							position.PnL = (position.CurrentPrice - position.AvgPrice) * position.Size
+						}
+						position.PnLRatio = (position.PnL / (position.AvgPrice * position.Size)) * 100
+					}
+					
+					m.positions[key] = position
+					updated = true
+				}
+			}
+			
+			if updated {
+				m.lastUpdate = time.Now()
+				// Add debug message for ticker update
+				m.AddDebugMessage(fmt.Sprintf("Ticker updated: %s @ %.2f", 
+					msg.InstrumentID, msg.CurrentPrice))
+			}
+		}
 
 		// Clear any previous errors when we get successful updates
 		m.ClearError()

@@ -1,16 +1,54 @@
 # OKX Trading Terminal (TUI)
 
-A terminal-based user interface for monitoring OKX trading positions and account balances in real-time.
+A professional terminal-based user interface for monitoring OKX trading positions and account balances in real-time with advanced grid layout.
 
-**Built with [Trae AI](https://trae.ai) - The world's best AI-powered IDE** 🚀
+## ✨ Enhanced Features
 
-## Features
+### 🎯 **Core Functionality**
+- **Real-time Position Monitoring** - Live WebSocket feeds from OKX API
+- **Dynamic Grid Layout** - Responsive grid displaying up to 10+ positions simultaneously
+- **Account Balance Tracking** - Real-time balance updates with color-coded changes
+- **Advanced Demo Mode** - 10 diverse cryptocurrency positions with live market data
+- **Professional UI** - Clean, organized terminal interface with modern styling
 
-- Real-time position monitoring
-- Account balance tracking
-- WebSocket connection to OKX API
-- Demo mode with public market data
-- Secure credential handling
+### 📊 **Trading Intelligence**
+- **Live PnL Calculations** - Real-time profit/loss tracking with percentage changes
+- **Position Analytics** - Entry price, current price, leverage, and position size
+- **Market Data Integration** - Live ticker feeds for all major trading pairs
+- **Balance Monitoring** - Track available balance and total equity changes
+- **Multi-Asset Support** - BTC, ETH, SOL, ADA, DOT, LINK, AVAX, MATIC, UNI, LTC
+
+### 🔧 **Technical Excellence**
+- **Dual Mode Operation** - Authenticated mode (real data) + Demo mode (test data)
+- **Error-Free Logging** - All debug information routed through error channels
+- **Secure Credential Handling** - Environment variable isolation with validation
+- **WebSocket Reliability** - Automatic reconnection and heartbeat monitoring
+- **Cross-Platform Support** - Linux, Windows, macOS (Intel & Apple Silicon)
+
+### 🎮 **User Experience**
+- **Interactive Controls** - Keyboard navigation (q/Ctrl+C to quit, d for debug toggle)
+- **Responsive Design** - Adapts to terminal width (1-8 cards per row)
+- **Real-time Updates** - Sub-second data refresh rates
+- **Debug Mode** - Toggle debug information visibility
+- **Status Indicators** - Connection status and last update timestamps
+
+## 🚀 **Quick Start**
+
+### Demo Mode (No Setup Required)
+```bash
+# Clone and run immediately
+git clone https://github.com/gandol/okx-tui-monitor.git
+cd okx-tui-monitor
+go run main.go
+```
+
+### Live Trading Mode
+```bash
+# Set up API credentials
+cp .env.example .env
+# Edit .env with your OKX API credentials
+go run main.go
+```
 
 ## Security & Setup
 
@@ -63,15 +101,8 @@ OKX_API_PASSPHRASE=your-actual-passphrase
 ```bash
 # With your API credentials (private data)
 go run main.go
-
-# Demo mode (public market data only)
-# Just leave the .env file with placeholder values
-go run main.go
 ```
 
-## Demo Mode
-
-If no valid API credentials are provided, the application runs in demo mode showing public market data for popular trading pairs (BTC, ETH, SOL).
 
 ## Build & Releases
 
@@ -179,13 +210,30 @@ chmod +x okx-tui-*
 okx-tui-windows-*.exe
 ```
 
-## Security Features
 
-- ✅ Input validation for API credentials
-- ✅ Automatic fallback to demo mode for invalid credentials
-- ✅ No sensitive data in logs or debug output
-- ✅ Secure credential handling
-- ✅ Environment variable isolation
+
+## 🔒 **Security & Technical Features**
+
+### **Enhanced Security**
+- ✅ **Input validation** for API credentials
+- ✅ **Zero sensitive data exposure** - No credentials in logs or debug output
+- ✅ **Secure credential handling** with environment variable isolation
+- ✅ **Error channel routing** - All debug information through secure channels
+- ✅ **No log.Printf usage** - Eliminated all standard logging for security
+
+### **Technical Excellence**
+- ✅ **WebSocket reliability** - Automatic reconnection and heartbeat monitoring
+- ✅ **Real-time data processing** - Sub-second ticker updates
+- ✅ **Memory efficient** - Optimized data structures and channel management
+- ✅ **Cross-platform compatibility** - Tested on Linux, Windows, macOS
+- ✅ **Responsive UI** - Dynamic grid layout adapting to terminal size
+- ✅ **Error resilience** - Graceful handling of network issues and API errors
+
+### **Performance Features**
+- ✅ **Concurrent processing** - Separate goroutines for WebSocket connections
+- ✅ **Efficient data updates** - Smart position merging and ticker integration
+- ✅ **Minimal resource usage** - Optimized for terminal environments
+- ✅ **Real-time calculations** - Live PnL updates without blocking UI
 
 ## Contributing
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -40,9 +39,14 @@ func validateAPICredentials(apiKey, secretKey, passphrase string) bool {
 }
 
 func main() {
+	// Create channels for communication first
+	positionCh := make(chan core.PositionData, 100)
+	balanceCh := make(chan core.BalanceData, 100)
+	errorCh := make(chan string, 10)
+
 	// Load environment variables from .env file
 	if err := godotenv.Load(); err != nil {
-		log.Printf("Warning: Could not load .env file: %v", err)
+		errorCh <- fmt.Sprintf("DEBUG: Warning: Could not load .env file: %v", err)
 	}
 
 	// Get API credentials from environment variables
@@ -54,18 +58,13 @@ func main() {
 	validCredentials := validateAPICredentials(apiKey, secretKey, passphrase)
 	
 	if !validCredentials {
-		log.Printf("Running in demo mode - Invalid or missing API credentials")
-		log.Printf("To use live data, please set valid OKX API credentials in .env file")
+		errorCh <- "DEBUG: Running in demo mode - Invalid or missing API credentials"
+		errorCh <- "DEBUG: To use live data, please set valid OKX API credentials in .env file"
 		// Clear invalid credentials to ensure demo mode
 		apiKey, secretKey, passphrase = "", "", ""
 	} else {
-		log.Printf("Running in authenticated mode with valid API credentials")
+		errorCh <- "DEBUG: Running in authenticated mode with valid API credentials"
 	}
-
-	// Create channels for communication
-	positionCh := make(chan core.PositionData, 100)
-	balanceCh := make(chan core.BalanceData, 100)
-	errorCh := make(chan string, 10)
 
 	// Create and start the TUI immediately
 	program := ui.NewProgram(positionCh, balanceCh, errorCh)
@@ -93,6 +92,8 @@ func main() {
 
 	// Run the TUI (this blocks until the user quits)
 	if _, err := program.Run(); err != nil {
-		log.Fatalf("Error running program: %v", err)
+		// Send error to error channel and exit gracefully
+		errorCh <- fmt.Sprintf("FATAL: Error running program: %v", err)
+		os.Exit(1)
 	}
 }

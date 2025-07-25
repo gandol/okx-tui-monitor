@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
 	"strconv"
 	"time"
@@ -35,23 +34,39 @@ type BalanceData struct {
 	Timestamp     int64   `json:"ts,string"`
 }
 
+// TickerData represents ticker information
+type TickerData struct {
+	InstrumentID string  `json:"instId"`
+	LastPrice    float64 `json:"last,string"`
+	BidPrice     float64 `json:"bidPx,string"`
+	AskPrice     float64 `json:"askPx,string"`
+	Volume24h    float64 `json:"vol24h,string"`
+	Timestamp    int64   `json:"ts,string"`
+}
+
 // OKXClient handles WebSocket connection to OKX API
 type OKXClient struct {
-	conn       *websocket.Conn
-	positionCh chan<- PositionData
-	balanceCh  chan<- BalanceData
-	errorCh    chan<- string
-	apiKey     string
-	secretKey  string
-	passphrase string
+	conn         *websocket.Conn
+	tickerConn   *websocket.Conn  // Separate connection for ticker data
+	positionCh   chan<- PositionData
+	balanceCh    chan<- BalanceData
+	errorCh      chan<- string
+	apiKey       string
+	secretKey    string
+	passphrase   string
+	currentPositions map[string]bool // Track current positions for ticker subscription
+	isDemo       bool               // Track if running in demo mode
+	demoPositions map[string]PositionData // Store demo positions
 }
 
 // NewOKXClient creates a new OKX WebSocket client
 func NewOKXClient(positionCh chan<- PositionData, balanceCh chan<- BalanceData, errorCh chan<- string) *OKXClient {
 	return &OKXClient{
-		positionCh: positionCh,
-		balanceCh:  balanceCh,
-		errorCh:    errorCh,
+		positionCh:       positionCh,
+		balanceCh:        balanceCh,
+		errorCh:          errorCh,
+		currentPositions: make(map[string]bool),
+		demoPositions:    make(map[string]PositionData),
 	}
 }
 
@@ -64,16 +79,28 @@ func (c *OKXClient) SetCredentials(apiKey, secretKey, passphrase string) {
 
 // Connect establishes WebSocket connection to OKX
 func (c *OKXClient) Connect() error {
+	// Always establish public WebSocket connection for ticker data
+	if err := c.connectTickerWebSocket(); err != nil {
+		c.errorCh <- fmt.Sprintf("Failed to connect to ticker WebSocket: %v", err)
+		// Continue without ticker connection - not critical
+	}
+
 	// Use public endpoint for demo/testing without credentials
 	var wsURL string
 	if c.apiKey == "" || c.secretKey == "" || c.passphrase == "" {
+		// Set demo mode flag
+		c.isDemo = true
+		
 		// Public WebSocket for demo data
 		wsURL = "wss://ws.okx.com:8443/ws/v5/public"
-		c.errorCh <- "DEBUG: Connecting to OKX public WebSocket"
+		c.errorCh <- "Connecting to OKX public WebSocket"
+		
+		// Create demo positions for display
+		c.createDemoPositions()
 	} else {
 		// Private WebSocket for real trading data
 		wsURL = "wss://ws.okx.com:8443/ws/v5/private"
-		c.errorCh <- "DEBUG: Connecting to OKX private WebSocket"
+		c.errorCh <- "Connecting to OKX private WebSocket"
 	}
 
 	u, err := url.Parse(wsURL)
@@ -86,7 +113,7 @@ func (c *OKXClient) Connect() error {
 		return fmt.Errorf("failed to connect to OKX WebSocket: %v", err)
 	}
 
-	c.errorCh <- "DEBUG: WebSocket connection established"
+	c.errorCh <- "WebSocket connection established"
 
 	// If we have credentials, authenticate first, then subscribe
 	if c.apiKey != "" && c.secretKey != "" && c.passphrase != "" {
@@ -104,6 +131,248 @@ func (c *OKXClient) Connect() error {
 	}
 
 	return nil
+}
+
+// connectTickerWebSocket establishes a separate WebSocket connection for ticker data
+func (c *OKXClient) connectTickerWebSocket() error {
+	// Use the public WebSocket endpoint for ticker data as specified in requirements
+	wsURL := "wss://wspri.okx.com:8443/ws/v5/ipublic"
+	
+	u, err := url.Parse(wsURL)
+	if err != nil {
+		return fmt.Errorf("invalid ticker WebSocket URL: %v", err)
+	}
+	
+	c.tickerConn, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ticker WebSocket: %v", err)
+	}
+
+	c.errorCh <- "DEBUG: Ticker WebSocket connection established"
+	
+	// Start ticker listener in a separate goroutine
+	go c.startTickerListener()
+	
+	return nil
+}
+
+// startTickerListener listens for ticker data on the separate connection
+func (c *OKXClient) startTickerListener() {
+	defer func() {
+		if c.tickerConn != nil {
+			c.tickerConn.Close()
+		}
+	}()
+
+	// Start heartbeat for ticker connection
+	go c.tickerHeartbeat()
+
+	for {
+		if c.tickerConn == nil {
+			break
+		}
+		
+		_, message, err := c.tickerConn.ReadMessage()
+		if err != nil {
+			c.errorCh <- fmt.Sprintf("DEBUG: Ticker WebSocket read error: %v", err)
+			return
+		}
+
+		// Handle simple pong response
+		if string(message) == "pong" {
+			continue
+		}
+
+		// Parse ticker message
+		var response map[string]interface{}
+		if err := json.Unmarshal(message, &response); err != nil {
+			c.errorCh <- fmt.Sprintf("DEBUG: Failed to parse ticker message: %v", err)
+			continue
+		}
+
+		// Handle ticker data
+		if data, ok := response["data"].([]interface{}); ok {
+			if arg, ok := response["arg"].(map[string]interface{}); ok {
+				if channel, ok := arg["channel"].(string); ok && channel == "tickers" {
+					c.errorCh <- fmt.Sprintf("DEBUG: Received %d ticker items", len(data))
+					for _, item := range data {
+						if tickerData, ok := item.(map[string]interface{}); ok {
+							c.handleTickerData(tickerData)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// tickerHeartbeat sends ping messages to keep ticker connection alive
+func (c *OKXClient) tickerHeartbeat() {
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if c.tickerConn != nil {
+				if err := c.tickerConn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+					c.errorCh <- fmt.Sprintf("DEBUG: Failed to send ticker ping: %v", err)
+					return
+				}
+			}
+		}
+	}
+}
+
+// handleTickerData processes ticker data and updates position current prices
+func (c *OKXClient) handleTickerData(data map[string]interface{}) {
+	instId := getString(data, "instId")
+	if instId == "" {
+		return
+	}
+
+	// Parse last price
+	var lastPrice float64
+	if last, ok := data["last"].(string); ok {
+		fmt.Sscanf(last, "%f", &lastPrice)
+	}
+
+	c.errorCh <- fmt.Sprintf("DEBUG: Ticker update for %s: %.2f", instId, lastPrice)
+
+	// In demo mode, update demo positions with ticker data
+	if c.isDemo {
+		if demoPos, exists := c.demoPositions[instId]; exists {
+			// Update the current price and recalculate PnL
+			demoPos.CurrentPrice = lastPrice
+			
+			// Calculate PnL based on position side
+			if demoPos.PositionSide == "short" {
+				// For short positions, profit when price goes down
+				demoPos.PnL = (demoPos.AvgPrice - demoPos.CurrentPrice) * demoPos.Size
+			} else {
+				// For long positions, profit when price goes up
+				demoPos.PnL = (demoPos.CurrentPrice - demoPos.AvgPrice) * demoPos.Size
+			}
+			
+			if demoPos.AvgPrice > 0 {
+				demoPos.PnLRatio = (demoPos.PnL / (demoPos.AvgPrice * demoPos.Size)) * 100
+			}
+			demoPos.Timestamp = time.Now().UnixNano() / int64(time.Millisecond)
+			
+			// Update stored demo position
+			c.demoPositions[instId] = demoPos
+			
+			// Send updated demo position to UI
+			c.positionCh <- demoPos
+			return
+		}
+	}
+
+	// For real positions, only send price updates (not full position data)
+	// The UI will merge this with existing position data
+	position := PositionData{
+		InstrumentID: instId,
+		CurrentPrice: lastPrice,
+		Timestamp:    time.Now().UnixNano() / int64(time.Millisecond),
+	}
+
+	// Send to position channel to update current price
+	c.positionCh <- position
+}
+
+// createDemoPositions creates demo trading positions for display in demo mode
+func (c *OKXClient) createDemoPositions() {
+	// Create demo positions for 10 different trading pairs
+	demoInstruments := []struct {
+		instId   string
+		avgPrice float64
+		size     float64
+		side     string
+	}{
+		{"BTC-USDT-SWAP", 45000.0, 0.1, "long"},
+		{"ETH-USDT-SWAP", 2800.0, 1.0, "long"},
+		{"SOL-USDT-SWAP", 178.0, 2.7, "short"},
+		{"ADA-USDT-SWAP", 0.45, 1000.0, "long"},
+		{"DOT-USDT-SWAP", 6.8, 50.0, "short"},
+		{"LINK-USDT-SWAP", 14.2, 25.0, "long"},
+		{"AVAX-USDT-SWAP", 28.5, 15.0, "short"},
+		{"MATIC-USDT-SWAP", 0.85, 500.0, "long"},
+		{"UNI-USDT-SWAP", 7.3, 40.0, "short"},
+		{"LTC-USDT-SWAP", 95.0, 3.0, "long"},
+	}
+
+	for _, demo := range demoInstruments {
+		position := PositionData{
+			InstrumentID: demo.instId,
+			PositionSide: demo.side,
+			Size:         demo.size,
+			AvgPrice:     demo.avgPrice,
+			CurrentPrice: demo.avgPrice, // Will be updated by ticker data
+			PnL:          0.0,           // Will be calculated when ticker updates
+			PnLRatio:     0.0,           // Will be calculated when ticker updates
+			Leverage:     10.0,          // Demo leverage
+			Timestamp:    time.Now().UnixNano() / int64(time.Millisecond),
+		}
+		
+		// Store demo position
+		c.demoPositions[demo.instId] = position
+		
+		// Send initial demo position to UI
+		c.positionCh <- position
+		
+		c.errorCh <- fmt.Sprintf("DEBUG: Created demo position for %s", demo.instId)
+	}
+	
+	// Also create a demo balance
+	demoBalance := BalanceData{
+		Currency:     "USDT",
+		TotalEquity:  10000.0, // Demo balance of $10,000
+		AvailBalance: 5000.0,  // $5,000 available
+		Timestamp:    time.Now().UnixNano() / int64(time.Millisecond),
+	}
+	
+	c.balanceCh <- demoBalance
+	c.errorCh <- "DEBUG: Created demo balance"
+}
+
+// updateTickerSubscriptions subscribes to tickers for current positions
+func (c *OKXClient) updateTickerSubscriptions() error {
+	if c.tickerConn == nil {
+		return fmt.Errorf("ticker connection not established")
+	}
+
+	// Build subscription args for current positions
+	var args []map[string]string
+	for instId := range c.currentPositions {
+		args = append(args, map[string]string{
+			"channel": "tickers",
+			"instId":  instId,
+		})
+	}
+
+	// If no positions, subscribe to all 10 demo tickers
+	if len(args) == 0 {
+		args = []map[string]string{
+			{"channel": "tickers", "instId": "BTC-USDT-SWAP"},
+			{"channel": "tickers", "instId": "ETH-USDT-SWAP"},
+			{"channel": "tickers", "instId": "SOL-USDT-SWAP"},
+			{"channel": "tickers", "instId": "ADA-USDT-SWAP"},
+			{"channel": "tickers", "instId": "DOT-USDT-SWAP"},
+			{"channel": "tickers", "instId": "LINK-USDT-SWAP"},
+			{"channel": "tickers", "instId": "AVAX-USDT-SWAP"},
+			{"channel": "tickers", "instId": "MATIC-USDT-SWAP"},
+			{"channel": "tickers", "instId": "UNI-USDT-SWAP"},
+			{"channel": "tickers", "instId": "LTC-USDT-SWAP"},
+		}
+	}
+
+	subMsg := map[string]interface{}{
+		"op":   "subscribe",
+		"args": args,
+	}
+
+	c.errorCh <- fmt.Sprintf("DEBUG: Subscribing to %d ticker channels", len(args))
+	return c.tickerConn.WriteJSON(subMsg)
 }
 
 // authenticate sends authentication message for private WebSocket
@@ -149,7 +418,7 @@ func (c *OKXClient) subscribe() error {
 			},
 		}
 	} else {
-		// Subscribe to public ticker data for demo
+		// Subscribe to public ticker data for all 10 demo pairs
 		subMsg = map[string]interface{}{
 			"op": "subscribe",
 			"args": []map[string]string{
@@ -165,11 +434,53 @@ func (c *OKXClient) subscribe() error {
 					"channel": "tickers",
 					"instId": "SOL-USDT-SWAP",
 				},
+				{
+					"channel": "tickers",
+					"instId": "ADA-USDT-SWAP",
+				},
+				{
+					"channel": "tickers",
+					"instId": "DOT-USDT-SWAP",
+				},
+				{
+					"channel": "tickers",
+					"instId": "LINK-USDT-SWAP",
+				},
+				{
+					"channel": "tickers",
+					"instId": "AVAX-USDT-SWAP",
+				},
+				{
+					"channel": "tickers",
+					"instId": "MATIC-USDT-SWAP",
+				},
+				{
+					"channel": "tickers",
+					"instId": "UNI-USDT-SWAP",
+				},
+				{
+					"channel": "tickers",
+					"instId": "LTC-USDT-SWAP",
+				},
 			},
 		}
 	}
 
-	return c.conn.WriteJSON(subMsg)
+	err := c.conn.WriteJSON(subMsg)
+	if err != nil {
+		return err
+	}
+
+	// Also trigger initial ticker subscriptions if ticker connection is available
+	if c.tickerConn != nil {
+		go func() {
+			if err := c.updateTickerSubscriptions(); err != nil {
+				c.errorCh <- fmt.Sprintf("Failed to initialize ticker subscriptions: %v", err)
+			}
+		}()
+	}
+
+	return nil
 }
 
 // StartListening starts listening for position updates
@@ -213,15 +524,13 @@ func (c *OKXClient) StartListening() {
 					if errMsg, ok := response["msg"]; ok {
 						msg = fmt.Sprintf("Authentication failed: %v", errMsg)
 					}
-					log.Printf("Authentication error: %v", msg)
 					c.errorCh <- msg
 				}
 			case "subscribe":
 				c.errorCh <- "DEBUG: Successfully subscribed to OKX channels"
 			case "error":
 				errMsg := fmt.Sprintf("OKX error: %v", response["msg"])
-				log.Printf("OKX error received: %v", errMsg)
-				c.errorCh <- errMsg
+				c.errorCh <- fmt.Sprintf("OKX error received: %v", errMsg)
 			}
 			continue
 		}
@@ -277,10 +586,11 @@ func (c *OKXClient) heartbeat() {
 	for {
 		select {
 		case <-ticker.C:
-			// Use simple string "ping" for OKX WebSocket
-			if err := c.conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
-				log.Printf("Failed to send ping: %v", err)
-				return
+			if c.conn != nil {
+				if err := c.conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+					c.errorCh <- fmt.Sprintf("Failed to send ping: %v", err)
+					return
+				}
 			}
 		}
 	}
@@ -355,6 +665,21 @@ func (c *OKXClient) parsePositionData(data map[string]interface{}) PositionData 
 		position.Leverage = 1.0 // Default leverage
 	}
 
+	// Track current positions for ticker subscriptions
+	if position.InstrumentID != "" && position.Size > 0 {
+		// Update current positions map
+		c.currentPositions[position.InstrumentID] = true
+		
+		// Update ticker subscriptions if we have a ticker connection
+		if c.tickerConn != nil {
+			go func() {
+				if err := c.updateTickerSubscriptions(); err != nil {
+					c.errorCh <- fmt.Sprintf("Failed to update ticker subscriptions: %v", err)
+				}
+			}()
+		}
+	}
+
 	return position
 }
 
@@ -385,10 +710,25 @@ func getString(data map[string]interface{}, key string) string {
 	return ""
 }
 
-// Close closes the WebSocket connection
+// Close closes the WebSocket connections
 func (c *OKXClient) Close() error {
+	var err error
+	
+	// Close main connection
 	if c.conn != nil {
-		return c.conn.Close()
+		if closeErr := c.conn.Close(); closeErr != nil {
+			err = closeErr
+		}
 	}
-	return nil
+	
+	// Close ticker connection
+	if c.tickerConn != nil {
+		if closeErr := c.tickerConn.Close(); closeErr != nil {
+			if err == nil {
+				err = closeErr
+			}
+		}
+	}
+	
+	return err
 }
