@@ -33,9 +33,10 @@ A professional terminal-based user interface for monitoring OKX trading position
 
 ### 🎮 **User Experience**
 - **Interactive Controls** - Keyboard navigation (q/Ctrl+C to quit, d for debug toggle)
+- **Command Line Options** - Debug mode flags (-d, -debug) for automatic debug activation
 - **Responsive Design** - Adapts to terminal width (1-8 cards per row)
 - **Real-time Updates** - Sub-second data refresh rates
-- **Debug Mode** - Toggle debug information visibility
+- **Debug Mode** - Toggle debug information visibility (keyboard or command-line)
 - **Status Indicators** - Connection status and last update timestamps
 
 ## 🚀 **Quick Start**
@@ -45,6 +46,17 @@ A professional terminal-based user interface for monitoring OKX trading position
 # Clone and run immediately
 git clone https://github.com/gandol/okx-tui-monitor.git
 cd okx-tui-monitor
+go run main.go
+```
+
+#### Command Line Options
+```bash
+# Enable debug mode automatically
+go run main.go -d
+# or
+go run main.go -debug
+
+# Normal mode (default)
 go run main.go
 ```
 

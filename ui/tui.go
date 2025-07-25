@@ -99,6 +99,13 @@ func NewProgram(positionCh <-chan core.PositionData, balanceCh <-chan core.Balan
 	return tea.NewProgram(model, tea.WithAltScreen())
 }
 
+// NewProgramWithDebug creates a new Bubble Tea program with debug mode enabled
+func NewProgramWithDebug(positionCh <-chan core.PositionData, balanceCh <-chan core.BalanceData, errorCh <-chan string) *tea.Program {
+	model := NewModel(positionCh, balanceCh, errorCh)
+	model.showDebug = true // Enable debug mode
+	return tea.NewProgram(model, tea.WithAltScreen())
+}
+
 // NewModel creates a new model
 func NewModel(positionCh <-chan core.PositionData, balanceCh <-chan core.BalanceData, errorCh <-chan string) Model {
 	return Model{
@@ -403,12 +410,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.PositionSide != "" {
 			// Full position data with position side
 			key := fmt.Sprintf("%s-%s", msg.InstrumentID, msg.PositionSide)
-			m.positions[key] = core.PositionData(msg)
-			m.lastUpdate = time.Now()
+			
+			if msg.Size > 0 {
+				// Position is open - add or update it
+				m.positions[key] = core.PositionData(msg)
+				m.lastUpdate = time.Now()
 
-			// Add debug message for position update
-			m.AddDebugMessage(fmt.Sprintf("Position updated: %s %s %.4f @ %.2f", 
-				msg.InstrumentID, msg.PositionSide, msg.Size, msg.CurrentPrice))
+				// Add debug message for position update
+				m.AddDebugMessage(fmt.Sprintf("Position updated: %s %s %.4f @ %.2f", 
+					msg.InstrumentID, msg.PositionSide, msg.Size, msg.CurrentPrice))
+			} else {
+				// Position is closed (size = 0) - remove it from display
+				if _, exists := m.positions[key]; exists {
+					delete(m.positions, key)
+					m.lastUpdate = time.Now()
+					
+					// Add debug message for position closure
+					m.AddDebugMessage(fmt.Sprintf("Position closed: %s %s", 
+						msg.InstrumentID, msg.PositionSide))
+				}
+			}
 		} else {
 			// Ticker update - find existing positions for this instrument and update price only
 			updated := false

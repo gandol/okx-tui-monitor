@@ -6,6 +6,10 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -77,8 +81,6 @@ jobs:
           1. Copy `.env.example` to `.env`
           2. Add your OKX API credentials
           3. Run the application
-          
-          **Built with [Trae AI](https://trae.ai)** 🚀
         draft: false
         prerelease: false
     
@@ -147,3 +149,48 @@ jobs:
         asset_path: ./releases/okx-tui-darwin-arm64
         asset_name: okx-tui-darwin-arm64
         asset_content_type: application/octet-stream
+
+    # Sync README with latest release information
+    - name: Update README with latest release
+      run: |
+        # Extract version from tag
+        VERSION=${GITHUB_REF#refs/tags/}
+        echo "Updating README for version: $VERSION"
+        
+        # Create a backup of README
+        cp README.md README.md.bak
+        
+        # Update version badge or references if they exist
+        if grep -q "version-" README.md; then
+          sed -i "s/version-[^-]*-/version-${VERSION#v}-/g" README.md
+        fi
+        
+        # Update any specific version references in installation examples
+        if grep -q "git checkout v" README.md; then
+          sed -i "s/git checkout v[0-9.]*/git checkout $VERSION/g" README.md
+        fi
+        
+        # Ensure the README includes the latest command-line options
+        if ! grep -q "\-d.*debug" README.md; then
+          echo "Adding debug flag documentation to README"
+          # Add debug flag documentation after the Quick Start section
+          sed -i '/### Demo Mode (No Setup Required)/a\\n#### Command Line Options\n```bash\n# Enable debug mode automatically\ngo run main.go -d\n# or\ngo run main.go -debug\n\n# Normal mode (default)\ngo run main.go\n```' README.md
+        fi
+        
+        echo "README sync completed for release $VERSION"
+
+    - name: Commit and push README changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add README.md
+        
+        # Only commit if there are changes
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "docs: sync README with release ${GITHUB_REF#refs/tags/} - update documentation"
+          git push origin HEAD:main
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

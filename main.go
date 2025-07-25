@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"regexp"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/gandol/okx-tui-monitor/core"
 	"github.com/gandol/okx-tui-monitor/ui"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joho/godotenv"
 )
 
@@ -39,6 +41,12 @@ func validateAPICredentials(apiKey, secretKey, passphrase string) bool {
 }
 
 func main() {
+	// Parse command line flags
+	var debugMode bool
+	flag.BoolVar(&debugMode, "debug", false, "Enable debug mode")
+	flag.BoolVar(&debugMode, "d", false, "Enable debug mode (shorthand)")
+	flag.Parse()
+
 	// Create channels for communication first
 	positionCh := make(chan core.PositionData, 100)
 	balanceCh := make(chan core.BalanceData, 100)
@@ -66,8 +74,13 @@ func main() {
 		errorCh <- "DEBUG: Running in authenticated mode with valid API credentials"
 	}
 
-	// Create and start the TUI immediately
-	program := ui.NewProgram(positionCh, balanceCh, errorCh)
+	// Create and start the TUI immediately with debug mode setting
+	var program *tea.Program
+	if debugMode {
+		program = ui.NewProgramWithDebug(positionCh, balanceCh, errorCh)
+	} else {
+		program = ui.NewProgram(positionCh, balanceCh, errorCh)
+	}
 	
 	// Start API connection in a separate goroutine
 	go func() {

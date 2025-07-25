@@ -353,17 +353,10 @@ func (c *OKXClient) updateTickerSubscriptions() error {
 	c.tickerMutex.Lock()
 	defer c.tickerMutex.Unlock()
 
-	// Build subscription args for current positions
 	var args []map[string]string
-	for instId := range c.currentPositions {
-		args = append(args, map[string]string{
-			"channel": "tickers",
-			"instId":  instId,
-		})
-	}
 
-	// If no positions, subscribe to all 10 demo tickers
-	if len(args) == 0 {
+	if c.isDemo {
+		// In demo mode, always subscribe to demo tickers for demo positions
 		args = []map[string]string{
 			{"channel": "tickers", "instId": "BTC-USDT-SWAP"},
 			{"channel": "tickers", "instId": "ETH-USDT-SWAP"},
@@ -376,6 +369,28 @@ func (c *OKXClient) updateTickerSubscriptions() error {
 			{"channel": "tickers", "instId": "UNI-USDT-SWAP"},
 			{"channel": "tickers", "instId": "LTC-USDT-SWAP"},
 		}
+		c.errorCh <- "DEBUG: Demo mode - subscribing to demo tickers"
+	} else {
+		// In real mode, only subscribe to tickers for actual current positions
+		for instId := range c.currentPositions {
+			args = append(args, map[string]string{
+				"channel": "tickers",
+				"instId":  instId,
+			})
+		}
+
+		// Log current positions being tracked
+		if len(c.currentPositions) > 0 {
+			var positionList []string
+			for instId := range c.currentPositions {
+				positionList = append(positionList, instId)
+			}
+			c.errorCh <- fmt.Sprintf("DEBUG: Real mode - tracking positions: %v", positionList)
+		} else {
+			c.errorCh <- "DEBUG: Real mode - no current positions, no ticker subscriptions needed"
+			// In real mode with no positions, don't subscribe to anything
+			return nil
+		}
 	}
 
 	subMsg := map[string]interface{}{
@@ -385,6 +400,35 @@ func (c *OKXClient) updateTickerSubscriptions() error {
 
 	c.errorCh <- fmt.Sprintf("DEBUG: Subscribing to %d ticker channels", len(args))
 	return c.tickerConn.WriteJSON(subMsg)
+}
+
+// unsubscribeAllTickers unsubscribes from all ticker channels to clean up subscriptions
+func (c *OKXClient) unsubscribeAllTickers() error {
+	if c.tickerConn == nil {
+		return fmt.Errorf("ticker connection not established")
+	}
+
+	// Create unsubscribe message for common demo tickers
+	unsubArgs := []map[string]string{
+		{"channel": "tickers", "instId": "BTC-USDT-SWAP"},
+		{"channel": "tickers", "instId": "ETH-USDT-SWAP"},
+		{"channel": "tickers", "instId": "SOL-USDT-SWAP"},
+		{"channel": "tickers", "instId": "ADA-USDT-SWAP"},
+		{"channel": "tickers", "instId": "DOT-USDT-SWAP"},
+		{"channel": "tickers", "instId": "LINK-USDT-SWAP"},
+		{"channel": "tickers", "instId": "AVAX-USDT-SWAP"},
+		{"channel": "tickers", "instId": "MATIC-USDT-SWAP"},
+		{"channel": "tickers", "instId": "UNI-USDT-SWAP"},
+		{"channel": "tickers", "instId": "LTC-USDT-SWAP"},
+	}
+
+	unsubMsg := map[string]interface{}{
+		"op":   "unsubscribe",
+		"args": unsubArgs,
+	}
+
+	c.errorCh <- fmt.Sprintf("DEBUG: Unsubscribing from %d ticker channels", len(unsubArgs))
+	return c.tickerConn.WriteJSON(unsubMsg)
 }
 
 // authenticate sends authentication message for private WebSocket
@@ -434,52 +478,19 @@ func (c *OKXClient) subscribe() error {
 			},
 		}
 	} else {
-		// Subscribe to public ticker data for all 10 demo pairs
-		subMsg = map[string]interface{}{
-			"op": "subscribe",
-			"args": []map[string]string{
-				{
-					"channel": "tickers",
-					"instId": "BTC-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "ETH-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "SOL-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "ADA-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "DOT-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "LINK-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "AVAX-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "MATIC-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "UNI-USDT-SWAP",
-				},
-				{
-					"channel": "tickers",
-					"instId": "LTC-USDT-SWAP",
-				},
-			},
+		// In demo mode, don't subscribe to anything on the main WebSocket
+		// Ticker data will be handled by the dedicated ticker WebSocket
+		c.errorCh <- "DEBUG: Demo mode - no subscriptions needed on main WebSocket"
+		
+		// Trigger ticker subscriptions on the dedicated ticker WebSocket
+		if c.tickerConn != nil {
+			go func() {
+				if err := c.updateTickerSubscriptions(); err != nil {
+					c.errorCh <- fmt.Sprintf("Failed to initialize ticker subscriptions: %v", err)
+				}
+			}()
 		}
+		return nil
 	}
 
 	// Protect main WebSocket writes with mutex
@@ -707,13 +718,27 @@ func (c *OKXClient) parsePositionData(data map[string]interface{}) PositionData 
 	}
 
 	// Track current positions for ticker subscriptions
-	if position.InstrumentID != "" && position.Size > 0 {
-		// Update current positions map
-		c.currentPositions[position.InstrumentID] = true
+	if position.InstrumentID != "" {
+		positionChanged := false
 		
-		// Update ticker subscriptions if we have a ticker connection
-		// Note: Removed goroutine to prevent concurrent WebSocket writes
-		if c.tickerConn != nil {
+		if position.Size > 0 {
+			// Add or update position in tracking map
+			if !c.currentPositions[position.InstrumentID] {
+				c.currentPositions[position.InstrumentID] = true
+				positionChanged = true
+				c.errorCh <- fmt.Sprintf("DEBUG: Added position tracking for %s", position.InstrumentID)
+			}
+		} else {
+			// Remove position from tracking map when size is 0 (position closed)
+			if c.currentPositions[position.InstrumentID] {
+				delete(c.currentPositions, position.InstrumentID)
+				positionChanged = true
+				c.errorCh <- fmt.Sprintf("DEBUG: Removed position tracking for %s (position closed)", position.InstrumentID)
+			}
+		}
+		
+		// Update ticker subscriptions only when positions change
+		if positionChanged && c.tickerConn != nil {
 			if err := c.updateTickerSubscriptions(); err != nil {
 				c.errorCh <- fmt.Sprintf("Failed to update ticker subscriptions: %v", err)
 			}
