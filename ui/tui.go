@@ -240,7 +240,11 @@ func (m Model) renderPositionCard(pos core.PositionData) string {
 	// Format entry price with appropriate precision
 	var entryPriceStr string
 	if pos.AvgPrice < 0.001 {
+		entryPriceStr = fmt.Sprintf("%.6f", pos.AvgPrice)
+	} else if pos.AvgPrice < 0.1 {
 		entryPriceStr = fmt.Sprintf("%.5f", pos.AvgPrice)
+	} else if pos.AvgPrice < 1.0 {
+		entryPriceStr = fmt.Sprintf("%.4f", pos.AvgPrice)
 	} else {
 		entryPriceStr = fmt.Sprintf("%.2f", pos.AvgPrice)
 	}
@@ -251,7 +255,11 @@ func (m Model) renderPositionCard(pos core.PositionData) string {
 	// Format current price with appropriate precision
 	var currentPriceStr string
 	if pos.CurrentPrice < 0.001 {
+		currentPriceStr = fmt.Sprintf("%.6f", pos.CurrentPrice)
+	} else if pos.CurrentPrice < 0.1 {
 		currentPriceStr = fmt.Sprintf("%.5f", pos.CurrentPrice)
+	} else if pos.CurrentPrice < 1.0 {
+		currentPriceStr = fmt.Sprintf("%.4f", pos.CurrentPrice)
 	} else {
 		currentPriceStr = fmt.Sprintf("%.2f", pos.CurrentPrice)
 	}
@@ -402,25 +410,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.AddDebugMessage(fmt.Sprintf("Position updated: %s %s %.4f @ %.2f", 
 				msg.InstrumentID, msg.PositionSide, msg.Size, msg.CurrentPrice))
 		} else {
-			// Ticker update - find existing positions for this instrument and update price
+			// Ticker update - find existing positions for this instrument and update price only
 			updated := false
 			for key, position := range m.positions {
 				if position.InstrumentID == msg.InstrumentID {
-					// Update current price and recalculate PnL
+					// Update current price only - preserve PnL from OKX API
 					position.CurrentPrice = msg.CurrentPrice
 					position.Timestamp = msg.Timestamp
-					
-					// Recalculate PnL if we have position data
-					if position.Size > 0 && position.AvgPrice > 0 {
-						if position.PositionSide == "short" {
-							// For short positions, profit when price goes down
-							position.PnL = (position.AvgPrice - position.CurrentPrice) * position.Size
-						} else {
-							// For long positions, profit when price goes up
-							position.PnL = (position.CurrentPrice - position.AvgPrice) * position.Size
-						}
-						position.PnLRatio = (position.PnL / (position.AvgPrice * position.Size)) * 100
-					}
 					
 					m.positions[key] = position
 					updated = true
@@ -430,7 +426,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if updated {
 				m.lastUpdate = time.Now()
 				// Add debug message for ticker update
-				m.AddDebugMessage(fmt.Sprintf("Ticker updated: %s @ %.2f", 
+				m.AddDebugMessage(fmt.Sprintf("Ticker updated: %s @ %.6f", 
 					msg.InstrumentID, msg.CurrentPrice))
 			}
 		}

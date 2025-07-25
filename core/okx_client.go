@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,8 +21,8 @@ type PositionData struct {
 	Size          float64 `json:"pos,string"`
 	AvgPrice      float64 `json:"avgPx,string"`
 	CurrentPrice  float64 `json:"markPx,string"`
-	PnL           float64 `json:"pnl,string"`
-	PnLRatio      float64 `json:"pnlRatio,string"`
+	PnL           float64 `json:"upl,string"`        // Use 'upl' for unrealized PnL
+	PnLRatio      float64 `json:"uplRatio,string"`   // Use 'uplRatio' for unrealized PnL ratio
 	Leverage      float64 `json:"lever,string"`
 	Timestamp     int64   `json:"ts,string"`
 }
@@ -57,6 +58,8 @@ type OKXClient struct {
 	currentPositions map[string]bool // Track current positions for ticker subscription
 	isDemo       bool               // Track if running in demo mode
 	demoPositions map[string]PositionData // Store demo positions
+	connMutex    sync.Mutex         // Protect main WebSocket writes
+	tickerMutex  sync.Mutex         // Protect ticker WebSocket writes
 }
 
 // NewOKXClient creates a new OKX WebSocket client
@@ -215,7 +218,12 @@ func (c *OKXClient) tickerHeartbeat() {
 		select {
 		case <-ticker.C:
 			if c.tickerConn != nil {
-				if err := c.tickerConn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+				// Protect ticker WebSocket writes with mutex
+				c.tickerMutex.Lock()
+				err := c.tickerConn.WriteMessage(websocket.TextMessage, []byte("ping"))
+				c.tickerMutex.Unlock()
+				
+				if err != nil {
 					c.errorCh <- fmt.Sprintf("DEBUG: Failed to send ticker ping: %v", err)
 					return
 				}
@@ -237,7 +245,7 @@ func (c *OKXClient) handleTickerData(data map[string]interface{}) {
 		fmt.Sscanf(last, "%f", &lastPrice)
 	}
 
-	c.errorCh <- fmt.Sprintf("DEBUG: Ticker update for %s: %.2f", instId, lastPrice)
+	c.errorCh <- fmt.Sprintf("DEBUG: Ticker update for %s: %.6f", instId, lastPrice)
 
 	// In demo mode, update demo positions with ticker data
 	if c.isDemo {
@@ -341,6 +349,10 @@ func (c *OKXClient) updateTickerSubscriptions() error {
 		return fmt.Errorf("ticker connection not established")
 	}
 
+	// Protect ticker WebSocket writes with mutex
+	c.tickerMutex.Lock()
+	defer c.tickerMutex.Unlock()
+
 	// Build subscription args for current positions
 	var args []map[string]string
 	for instId := range c.currentPositions {
@@ -396,6 +408,10 @@ func (c *OKXClient) authenticate() error {
 		},
 	}
 
+	// Protect main WebSocket writes with mutex
+	c.connMutex.Lock()
+	defer c.connMutex.Unlock()
+	
 	return c.conn.WriteJSON(authMsg)
 }
 
@@ -466,7 +482,11 @@ func (c *OKXClient) subscribe() error {
 		}
 	}
 
+	// Protect main WebSocket writes with mutex
+	c.connMutex.Lock()
 	err := c.conn.WriteJSON(subMsg)
+	c.connMutex.Unlock()
+	
 	if err != nil {
 		return err
 	}
@@ -587,7 +607,12 @@ func (c *OKXClient) heartbeat() {
 		select {
 		case <-ticker.C:
 			if c.conn != nil {
-				if err := c.conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+				// Protect main WebSocket writes with mutex
+				c.connMutex.Lock()
+				err := c.conn.WriteMessage(websocket.TextMessage, []byte("ping"))
+				c.connMutex.Unlock()
+				
+				if err != nil {
 					c.errorCh <- fmt.Sprintf("Failed to send ping: %v", err)
 					return
 				}
@@ -628,33 +653,49 @@ func (c *OKXClient) parsePositionData(data map[string]interface{}) PositionData 
 		fmt.Sscanf(last, "%f", &position.CurrentPrice)
 	}
 
-	// Parse PnL fields - use 'upl' for unrealized PnL (live positions)
-	if upl, ok := data["upl"].(string); ok {
+	// Parse PnL fields - prioritize actual OKX data over calculations
+	pnlFound := false
+	if upl, ok := data["upl"].(string); ok && upl != "" && upl != "0" {
 		fmt.Sscanf(upl, "%f", &position.PnL)
-		c.errorCh <- fmt.Sprintf("DEBUG: Using UPL (unrealized PnL): %s", upl)
-	} else if pnl, ok := data["pnl"].(string); ok {
+		pnlFound = true
+		c.errorCh <- fmt.Sprintf("DEBUG: Using UPL (unrealized PnL): %s = %.4f", upl, position.PnL)
+	} else if pnl, ok := data["pnl"].(string); ok && pnl != "" && pnl != "0" {
 		// Fallback to 'pnl' for realized PnL or other data
 		fmt.Sscanf(pnl, "%f", &position.PnL)
-		c.errorCh <- fmt.Sprintf("DEBUG: Using PNL (realized PnL): %s", pnl)
-	} else {
-		// Calculate mock PnL for ticker data
-		if position.CurrentPrice > 0 && position.AvgPrice > 0 {
+		pnlFound = true
+		c.errorCh <- fmt.Sprintf("DEBUG: Using PNL (realized PnL): %s = %.4f", pnl, position.PnL)
+	}
+	
+	// Only calculate mock PnL if no real PnL data is available and we have valid prices
+	if !pnlFound && position.CurrentPrice > 0 && position.AvgPrice > 0 && position.Size > 0 {
+		if position.PositionSide == "short" {
+			// For short positions, profit when price goes down
+			position.PnL = (position.AvgPrice - position.CurrentPrice) * position.Size
+		} else {
+			// For long positions, profit when price goes up
 			position.PnL = (position.CurrentPrice - position.AvgPrice) * position.Size
-			c.errorCh <- fmt.Sprintf("DEBUG: Calculated mock PnL: %.4f", position.PnL)
 		}
+		c.errorCh <- fmt.Sprintf("DEBUG: Calculated PnL for %s: %.4f (avg: %.4f, current: %.4f, size: %.4f)", 
+			position.PositionSide, position.PnL, position.AvgPrice, position.CurrentPrice, position.Size)
 	}
 
-	// Parse PnL ratio - use 'uplRatio' for unrealized PnL ratio
-	if uplRatio, ok := data["uplRatio"].(string); ok {
+	// Parse PnL ratio - prioritize actual OKX data
+	ratioFound := false
+	if uplRatio, ok := data["uplRatio"].(string); ok && uplRatio != "" && uplRatio != "0" {
 		fmt.Sscanf(uplRatio, "%f", &position.PnLRatio)
 		position.PnLRatio *= 100 // Convert from decimal to percentage
-		c.errorCh <- fmt.Sprintf("DEBUG: Using UPL Ratio: %s (converted to %.2f%%)", uplRatio, position.PnLRatio)
-	} else if pnlRatio, ok := data["pnlRatio"].(string); ok {
+		ratioFound = true
+		c.errorCh <- fmt.Sprintf("DEBUG: Using UPL Ratio: %s = %.2f%%", uplRatio, position.PnLRatio)
+	} else if pnlRatio, ok := data["pnlRatio"].(string); ok && pnlRatio != "" && pnlRatio != "0" {
 		// Fallback to 'pnlRatio' for other data
 		fmt.Sscanf(pnlRatio, "%f", &position.PnLRatio)
 		position.PnLRatio *= 100 // Convert from decimal to percentage
-		c.errorCh <- fmt.Sprintf("DEBUG: Using PNL Ratio: %s (converted to %.2f%%)", pnlRatio, position.PnLRatio)
-	} else if position.AvgPrice > 0 {
+		ratioFound = true
+		c.errorCh <- fmt.Sprintf("DEBUG: Using PNL Ratio: %s = %.2f%%", pnlRatio, position.PnLRatio)
+	}
+	
+	// Only calculate ratio if no real ratio data is available and we have valid data
+	if !ratioFound && position.AvgPrice > 0 && position.Size > 0 {
 		position.PnLRatio = (position.PnL / (position.AvgPrice * position.Size)) * 100
 		c.errorCh <- fmt.Sprintf("DEBUG: Calculated PnL ratio: %.2f%%", position.PnLRatio)
 	}
@@ -671,12 +712,11 @@ func (c *OKXClient) parsePositionData(data map[string]interface{}) PositionData 
 		c.currentPositions[position.InstrumentID] = true
 		
 		// Update ticker subscriptions if we have a ticker connection
+		// Note: Removed goroutine to prevent concurrent WebSocket writes
 		if c.tickerConn != nil {
-			go func() {
-				if err := c.updateTickerSubscriptions(); err != nil {
-					c.errorCh <- fmt.Sprintf("Failed to update ticker subscriptions: %v", err)
-				}
-			}()
+			if err := c.updateTickerSubscriptions(); err != nil {
+				c.errorCh <- fmt.Sprintf("Failed to update ticker subscriptions: %v", err)
+			}
 		}
 	}
 

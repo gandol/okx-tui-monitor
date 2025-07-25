@@ -2,6 +2,12 @@
 
 A professional terminal-based user interface for monitoring OKX trading positions and account balances in real-time with advanced grid layout.
 
+## 🎬 Preview
+
+![OKX TUI Monitor Demo](assets/preview.mp4)
+
+*See the OKX TUI Monitor in action - real-time position monitoring, live PnL calculations, and responsive grid layout.*
+
 ## ✨ Enhanced Features
 
 ### 🎯 **Core Functionality**
