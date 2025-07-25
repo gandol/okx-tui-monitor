@@ -126,7 +126,8 @@ go run main.go
 
 ### 📦 **Pre-built Releases**
 
-Download the latest release for your platform:
+#### **🚀 Stable Releases (Recommended)**
+Download the latest stable release for your platform:
 
 | Platform | Architecture | Download |
 |----------|-------------|----------|
@@ -136,6 +137,20 @@ Download the latest release for your platform:
 | **Windows** | ARM64 | [okx-tui-windows-arm64.exe](https://github.com/gandol/okx-tui-monitor/releases/latest/download/okx-tui-windows-arm64.exe) |
 | **macOS** | Intel (x86_64) | [okx-tui-darwin-amd64](https://github.com/gandol/okx-tui-monitor/releases/latest/download/okx-tui-darwin-amd64) |
 | **macOS** | Apple Silicon (ARM64) | [okx-tui-darwin-arm64](https://github.com/gandol/okx-tui-monitor/releases/latest/download/okx-tui-darwin-arm64) |
+
+#### **🔧 Development Builds (Latest Features)**
+Get the newest features and improvements (may be unstable):
+
+| Platform | Architecture | Download |
+|----------|-------------|----------|
+| **Linux** | x86_64 | [okx-tui-linux-amd64](https://github.com/gandol/okx-tui-monitor/releases/download/latest-dev/okx-tui-linux-amd64) |
+| **Linux** | ARM64 | [okx-tui-linux-arm64](https://github.com/gandol/okx-tui-monitor/releases/download/latest-dev/okx-tui-linux-arm64) |
+| **Windows** | x86_64 | [okx-tui-windows-amd64.exe](https://github.com/gandol/okx-tui-monitor/releases/download/latest-dev/okx-tui-windows-amd64.exe) |
+| **Windows** | ARM64 | [okx-tui-windows-arm64.exe](https://github.com/gandol/okx-tui-monitor/releases/download/latest-dev/okx-tui-windows-arm64.exe) |
+| **macOS** | Intel (x86_64) | [okx-tui-darwin-amd64](https://github.com/gandol/okx-tui-monitor/releases/download/latest-dev/okx-tui-darwin-amd64) |
+| **macOS** | Apple Silicon (ARM64) | [okx-tui-darwin-arm64](https://github.com/gandol/okx-tui-monitor/releases/download/latest-dev/okx-tui-darwin-arm64) |
+
+> **Note:** Development builds contain the latest features but may be unstable. Use stable releases for production.
 
 ### 🔨 **Build from Source**
 
