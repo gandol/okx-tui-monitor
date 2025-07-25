@@ -4,7 +4,10 @@ A professional terminal-based user interface for monitoring OKX trading position
 
 ## 🎬 Preview
 
-https://github.com/gandol/okx-tui-monitor/raw/main/assets/preview.mp4
+<video width="100%" controls>
+  <source src="https://github.com/gandol/okx-tui-monitor/raw/main/assets/preview.mp4" type="video/mp4">
+  Your browser does not support the video tag. <a href="https://github.com/gandol/okx-tui-monitor/raw/main/assets/preview.mp4">Download the video</a>
+</video>
 
 *See the OKX TUI Monitor in action - real-time position monitoring, live PnL calculations, and responsive grid layout.*
 
